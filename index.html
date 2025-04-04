@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="sl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jedilni list - Femec, Gastro House in Vinka</title>
+  <!-- Prednaložba povezav za pospešitev -->
+  <link rel="preconnect" href="https://api.allorigins.win">
+  <link rel="preconnect" href="http://www.femec.si">
+  <link rel="preload" as="fetch" href="https://api.allorigins.win/raw?url=http://www.femec.si/">
+  <style>
+    body { 
+      font-family: Arial, sans-serif; 
+      text-align: center; 
+      background-color: #f8f9fa; 
+      margin: 0; 
+      padding: 0;
+    }
+    h1 {
+      margin: 20px 0;
+    }
+    #restaurant-switcher {
+      margin: 20px;
+    }
+    #restaurant-switcher .daysbutton {
+      margin: 0 5px;
+    }
+    .daysbutton { 
+      display: inline-block; 
+      margin: 5px; 
+      padding: 10px 15px; 
+      background: #007bff; 
+      color: white; 
+      cursor: pointer; 
+      border: none;
+      border-radius: 5px;
+      font-size: 16px;
+      transition: background 0.3s ease;
+    }
+    .daysbutton:hover { 
+      background: #0056b3; 
+    }
+    .active { 
+      background: green !important; 
+    }
+    .menu { 
+      margin-top: 20px; 
+      padding: 15px; 
+      background: white; 
+      border-radius: 10px; 
+      box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+      width: 90%;
+      max-width: 700px;
+      margin-left: auto;
+      margin-right: auto;
+      display: none;
+      text-align: left;
+    }
+    .day-heading {
+      background-color: #007bff;
+      color: #fff;
+      padding: 12px 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+    .day-heading h2 {
+      margin: 0;
+      font-size: 1.2rem;
+      font-weight: bold;
+    }
+    .dish {
+      background: white;
+      border-radius: 10px;
+      padding: 15px;
+      margin-bottom: 15px;
+      box-shadow: 0px 0px 8px rgba(0, 0, 0, 0.1);
+      transition: background 0.3s ease;
+    }
+    .dish:hover {
+      background: #e9ecef;
+    }
+    .dish h4 {
+      font-size: 18px;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      font-weight: bold;
+    }
+    .dish h4 span {
+      font-size: 20px;
+      margin-right: 10px;
+    }
+    .side-dish {
+      font-size: 16px;
+      color: #555;
+      margin-top: 5px;
+      padding-left: 35px;
+    }
+    .loader-container {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin: 10px auto;
+    }
+    .loader-text {
+      font-size: 16px;
+      color: #333;
+    }
+    .loader-icon {
+      font-size: 24px;
+      display: inline-block;
+      animation: slideRight 1.5s linear infinite;
+    }
+    @keyframes slideRight {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(30px); }
+    }
+  </style>
+</head>
+<body>
+  <h1>Jedilni list</h1>
+  
+  <!-- Preklopnik restavracij -->
+  <div id="restaurant-switcher">
+    <div id="femec-button" class="daysbutton active">Femec</div>
+    <div id="gastro-button" class="daysbutton">Gastro House</div>
+    <div id="vinka-button" class="daysbutton">Vinka</div>
+  </div>
+  
+  <!-- Kontejner za dneve (gumbi) -->
+  <div id="days"></div>
+  <!-- Kontejner za prikaz menija -->
+  <div id="menu" class="menu"></div>
+
+  <script>
+    const PROXY_URL = "https://api.allorigins.win/raw?url=";
+    const FEMEC_URL = "http://www.femec.si/";
+    const GASTRO_URL = "https://www.gastrohouse.si/index.php/tedenska-ponudba";
+    const VINKA_URL = "https://www.vinka.si/malice-in-kosila.html";
+    
+    let globalFemecHtml = null;
+    let globalGastroHtml = null;
+    let globalVinkaHtml = null;
+    let currentRestaurant = "femec";
+    let currentActiveDay = null;
+    
+    const days = {
+      "ponedeljek": "Ponedeljek",
+      "torek": "Torek",
+      "sreda": "Sreda",
+      "cetrtek": "Četrtek",
+      "petek": "Petek"
+    };
+    let buttons = {};
+
+    // Generična funkcija za pridobivanje HTML-ja brez cache (s retry)
+    function fetchHTMLNoCache(url, retries = 3) {
+      const fullUrl = url + '?_=' + new Date().getTime();
+      return fetch(PROXY_URL + encodeURIComponent(fullUrl), { cache: "no-store" })
+        .then(response => {
+          if (!response.ok) throw new Error("Network error");
+          return response.text();
+        })
+        .catch(error => {
+          if (retries > 0) {
+            return fetchHTMLNoCache(url, retries - 1);
+          }
+          throw error;
+        });
+    }
+    
+    function showLoader() {
+      document.getElementById("menu").innerHTML = `
+        <div class="loader-container">
+          <span class="loader-text">Nalaganje jedilnika...</span>
+          <span class="loader-icon">🍕</span>
+        </div>`;
+      document.getElementById("menu").style.display = "block";
+    }
+    
+    function renderDayHeading(headingText) {
+      return `
+        <div class="day-heading">
+          <h2>${headingText}</h2>
+        </div>
+      `;
+    }
+    
+    // --- FEMEC ---
+    function displayFemecMenu(day, htmlData) {
+      let parser = new DOMParser();
+      let doc = parser.parseFromString(htmlData, "text/html");
+      let menuSection = doc.getElementById(day);
+      if (menuSection) {
+        let dishes = [];
+        let items = [...menuSection.querySelectorAll(".menucontent p")];
+        let currentDish = null;
+        let isWeeklySpecial = false;
+        let lastDishWasSpecial = false;
+        items.forEach(el => {
+          let text = el.textContent.trim();
+          if (text.length) {
+            if (text.toLowerCase().includes("tedensk ponudba")) {
+              if (currentDish) { dishes.push(currentDish); }
+              isWeeklySpecial = true;
+              dishes.push({ name: "TEDENSKA PONUDBA", sides: [] });
+              currentDish = null;
+            } else if (text.toLowerCase().includes("samopostrežni solatni bar")) {
+              if (isWeeklySpecial && lastDishWasSpecial) {
+                dishes.push({ name: text, sides: [] });
+              } else if (currentDish) {
+                currentDish.sides.push(text);
+              }
+              lastDishWasSpecial = isWeeklySpecial;
+            } else {
+              if (currentDish) { dishes.push(currentDish); }
+              currentDish = { name: text, sides: [] };
+              lastDishWasSpecial = false;
+            }
+          }
+        });
+        if (currentDish) { dishes.push(currentDish); }
+    
+        let menuHTML = dishes.map(dish => `
+          <div class="dish">
+            <h4>${dish.name === "TEDENSKA PONUDBA" ? dish.name : `<span>🍖</span> ${dish.name}`}</h4>
+            ${dish.sides.map(side => `<p class="side-dish">${side}</p>`).join("")}
+          </div>
+        `).join("");
+    
+        document.getElementById("menu").innerHTML = `
+          ${renderDayHeading(`${days[day]} - Femec`)}
+          ${menuHTML}
+        `;
+        document.getElementById("menu").style.display = "block";
+      } else {
+        document.getElementById("menu").innerHTML = `
+          ${renderDayHeading(days[day])}
+          <p>Meni ni na voljo.</p>
+        `;
+        document.getElementById("menu").style.display = "block";
+      }
+    }
+    
+    function fetchFemecForToday(day) {
+      showLoader();
+      fetchHTMLNoCache(FEMEC_URL)
+        .then(html => {
+          globalFemecHtml = html;
+          currentActiveDay = day;
+          displayFemecMenu(day, html);
+        })
+        .catch(error => {
+          console.error("Napaka pri nalaganju Femec menija:", error);
+          document.getElementById("menu").innerHTML = `<p>Napaka pri nalaganju jedilnika (Femec).</p>`;
+        });
+    }
+    
+    function initializeFemecDays() {
+      const daysContainer = document.getElementById("days");
+      daysContainer.innerHTML = "";
+      buttons = {};
+      Object.keys(days).forEach(day => {
+        let button = document.createElement("div");
+        button.classList.add("daysbutton");
+        button.innerText = days[day];
+        button.onclick = () => {
+          document.querySelectorAll("#days .daysbutton").forEach(btn => btn.classList.remove("active"));
+          button.classList.add("active");
+          if (globalFemecHtml) {
+            currentActiveDay = day;
+            displayFemecMenu(day, globalFemecHtml);
+          } else {
+            fetchFemecForToday(day);
+          }
+        };
+        daysContainer.appendChild(button);
+        buttons[day] = button;
+      });
+      let refreshButton = document.createElement("div");
+      refreshButton.classList.add("daysbutton");
+      refreshButton.innerText = "Osveži";
+      refreshButton.onclick = () => {
+        globalFemecHtml = null;
+        if (currentActiveDay) {
+          fetchFemecForToday(currentActiveDay);
+        }
+        loadAllOthersInBackground();
+      };
+      daysContainer.appendChild(refreshButton);
+    }
+    
+    // --- GASTRO HOUSE ---
+    function displayGastroMenu(htmlData, index) {
+      let parser = new DOMParser();
+      let doc = parser.parseFromString(htmlData, "text/html");
+      let panels = doc.querySelectorAll('.sprocket-tabs-panel');
+      if (panels && panels.length > index) {
+        let activePanel = panels[index];
+        let headerEl = activePanel.querySelector('.naslov h3');
+        let headerText = headerEl ? headerEl.textContent.trim() : "Gastro House";
+        let listEl = activePanel.querySelector('.futr ul');
+        if (listEl) {
+          let liItems = listEl.querySelectorAll("li");
+          let dishes = [];
+          let currentDish = null;
+          liItems.forEach(li => {
+            if (li.querySelector("strong")) {
+              if (currentDish) { dishes.push(currentDish); }
+              currentDish = { name: li.textContent.trim(), sides: [] };
+            } else {
+              if (currentDish) {
+                currentDish.sides.push(li.textContent.trim());
+              } else {
+                currentDish = { name: li.textContent.trim(), sides: [] };
+              }
+            }
+          });
+          if (currentDish) { dishes.push(currentDish); }
+          
+          let menuHTML = dishes.map(dish => `
+            <div class="dish">
+              <h4>${dish.name}</h4>
+              ${dish.sides.map(side => `<p class="side-dish">${side}</p>`).join("")}
+            </div>
+          `).join("");
+          
+          document.getElementById("menu").innerHTML = `
+            ${renderDayHeading(`${headerText} - Gastro House (08.00-16.00)`)}
+            ${menuHTML}
+          `;
+          document.getElementById("menu").style.display = "block";
+        } else {
+          document.getElementById("menu").innerHTML = `
+            ${renderDayHeading(headerText)}
+            <p>Meni ni na voljo.</p>
+          `;
+          document.getElementById("menu").style.display = "block";
+        }
+      } else {
+        document.getElementById("menu").innerHTML = `
+          ${renderDayHeading("Gastro House")}
+          <p>Meni ni na voljo.</p>
+        `;
+        document.getElementById("menu").style.display = "block";
+      }
+    }
+    
+    function showGastro() {
+      if (globalGastroHtml) {
+        initializeGastroDays(globalGastroHtml);
+      } else {
+        showLoader();
+        fetchHTMLNoCache(GASTRO_URL)
+          .then(html => {
+            globalGastroHtml = html;
+            initializeGastroDays(html);
+          })
+          .catch(error => {
+            console.error("Napaka pri nalaganju Gastro House menija:", error);
+            document.getElementById("menu").innerHTML = `<p>Napaka pri nalaganju jedilnika (Gastro House).</p>`;
+          });
+      }
+    }
+    
+    function initializeGastroDays(htmlData) {
+      let parser = new DOMParser();
+      let doc = parser.parseFromString(htmlData, "text/html");
+      let navItems = doc.querySelectorAll('.sprocket-tabs-nav li');
+      const daysContainer = document.getElementById("days");
+      daysContainer.innerHTML = "";
+      if (navItems.length === 0) {
+        // Če ni zavihkov, poskusimo prikazati prvi panel neposredno
+        console.warn("Ni najdenih zavihkov za Gastro. Prikazujem prvi panel.");
+        displayGastroMenu(htmlData, 0);
+        return;
+      }
+      navItems.forEach((item, index) => {
+        let dayName = item.textContent.trim();
+        let button = document.createElement("div");
+        button.classList.add("daysbutton");
+        button.innerText = dayName;
+        button.onclick = () => {
+          document.querySelectorAll("#days .daysbutton").forEach(btn => btn.classList.remove("active"));
+          button.classList.add("active");
+          displayGastroMenu(htmlData, index);
+        };
+        daysContainer.appendChild(button);
+        if (index === 0) {
+          button.classList.add("active");
+          displayGastroMenu(htmlData, 0);
+        }
+      });
+    }
+    
+    // --- VINKA ---
+    function displayVinkaMenu(htmlData) {
+      let parser = new DOMParser();
+      let doc = parser.parseFromString(htmlData, "text/html");
+      let contentDiv = doc.querySelector('div.col-md-9[role="content"]');
+      if (contentDiv) {
+        let headerH3 = contentDiv.querySelector("h3");
+        let headerText = headerH3 ? headerH3.textContent.trim() : "Vinka";
+        let pEl = contentDiv.querySelector("p");
+        if (pEl) {
+          let parts = pEl.innerHTML.split(/<br\s*\/?>\s*<br\s*\/?>/i);
+          let startIndex = parts.findIndex(part => part.includes("Naše stalnice:"));
+          let dishesArray = (startIndex !== -1) ? parts.slice(startIndex + 1) : parts;
+          dishesArray = dishesArray.map(item => item.trim()).filter(item => item.length > 0);
+          
+          let menuHTML = dishesArray.map(dish => `
+            <div class="dish">
+              <h4>${dish}</h4>
+            </div>
+          `).join("");
+          
+          document.getElementById("menu").innerHTML = `
+            ${renderDayHeading(`${headerText} - Vinka (10:30 - 15:00)`)}
+            ${menuHTML}
+          `;
+          document.getElementById("menu").style.display = "block";
+        } else {
+          document.getElementById("menu").innerHTML = `
+            ${renderDayHeading(headerText)}
+            <p>Meni ni na voljo.</p>
+          `;
+          document.getElementById("menu").style.display = "block";
+        }
+      } else {
+        document.getElementById("menu").innerHTML = `
+          ${renderDayHeading("Vinka")}
+          <p>Meni ni na voljo.</p>
+        `;
+        document.getElementById("menu").style.display = "block";
+      }
+    }
+    
+    function showVinka() {
+      if (globalVinkaHtml) {
+        displayVinkaMenu(globalVinkaHtml);
+      } else {
+        showLoader();
+        fetchHTMLNoCache(VINKA_URL)
+          .then(html => {
+            globalVinkaHtml = html;
+            displayVinkaMenu(html);
+          })
+          .catch(error => {
+            console.error("Napaka pri nalaganju Vinka menija:", error);
+            document.getElementById("menu").innerHTML = `<p>Napaka pri nalaganju jedilnika (Vinka).</p>`;
+          });
+      }
+    }
+    
+    // --- OZADINSKO NALAGANJE OSTALA ---
+    function loadAllOthersInBackground() {
+      if (!globalFemecHtml) {
+        fetchHTMLNoCache(FEMEC_URL)
+          .then(html => {
+            globalFemecHtml = html;
+          })
+          .catch(err => console.warn("Neuspešno ozadinsko nalaganje Femec:", err));
+      }
+      if (!globalGastroHtml) {
+        fetchHTMLNoCache(GASTRO_URL)
+          .then(html => {
+            globalGastroHtml = html;
+          })
+          .catch(err => console.warn("Neuspešno ozadinsko nalaganje Gastro:", err));
+      }
+      if (!globalVinkaHtml) {
+        fetchHTMLNoCache(VINKA_URL)
+          .then(html => {
+            globalVinkaHtml = html;
+          })
+          .catch(err => console.warn("Neuspešno ozadinsko nalaganje Vinka:", err));
+      }
+    }
+    
+    // --- DOGODKI OB ZAGONU ---
+    document.addEventListener("DOMContentLoaded", function () {
+      document.getElementById("femec-button").onclick = () => {
+        if (currentRestaurant !== "femec") {
+          currentRestaurant = "femec";
+          document.getElementById("femec-button").classList.add("active");
+          document.getElementById("gastro-button").classList.remove("active");
+          document.getElementById("vinka-button").classList.remove("active");
+          initializeFemecDays();
+          let today = new Date().getDay();
+          let todayKey = (today >= 1 && today <= 5) ? Object.keys(days)[today - 1] : "ponedeljek";
+          currentActiveDay = todayKey;
+          if (buttons[todayKey]) {
+            buttons[todayKey].classList.add("active");
+            fetchFemecForToday(todayKey);
+          }
+          loadAllOthersInBackground();
+        }
+      };
+      
+      document.getElementById("gastro-button").onclick = () => {
+        if (currentRestaurant !== "gastro") {
+          currentRestaurant = "gastro";
+          document.getElementById("gastro-button").classList.add("active");
+          document.getElementById("femec-button").classList.remove("active");
+          document.getElementById("vinka-button").classList.remove("active");
+          document.getElementById("days").innerHTML = "";
+          showGastro();
+        }
+      };
+      
+      document.getElementById("vinka-button").onclick = () => {
+        if (currentRestaurant !== "vinka") {
+          currentRestaurant = "vinka";
+          document.getElementById("vinka-button").classList.add("active");
+          document.getElementById("femec-button").classList.remove("active");
+          document.getElementById("gastro-button").classList.remove("active");
+          document.getElementById("days").innerHTML = "";
+          showVinka();
+        }
+      };
+      
+      // Ob prvem zagonu: prikažemo Femec meni za današnji dan brez cache,
+      // nato pa v ozadju naložimo ostale menije.
+      initializeFemecDays();
+      let today = new Date().getDay();
+      let todayKey = (today >= 1 && today <= 5) ? Object.keys(days)[today - 1] : "ponedeljek";
+      currentActiveDay = todayKey;
+      if (buttons[todayKey]) {
+        buttons[todayKey].classList.add("active");
+      }
+      fetchFemecForToday(todayKey);
+      loadAllOthersInBackground();
+    });
+  </script>
+</body>
+</html>
